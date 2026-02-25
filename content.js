@@ -513,10 +513,18 @@
     const panel = await U.observeForElement({
       root: document,
       selector:
-        'button[data-view-name="hiring-applicant-contact"], button[data-view-name="hiring-applicant-contact-message"], button[aria-label*="Contact"], [data-test-applicant-details], [role="region"], .hiring-applicant-header',
+        'button[data-view-name="hiring-applicant-contact"], button[data-view-name="hiring-applicant-contact-message"], button[aria-label*="Contact"], button[aria-label="Message"], [data-test-applicant-details], [role="region"], .hiring-applicant-header',
       timeoutMs: 12000
     });
-    return Boolean(panel);
+    if (panel) return true;
+
+    // Fallback: check if a visible "Message" button appeared in the panel
+    const allBtns = Array.from(document.querySelectorAll('button'));
+    const msgBtn = allBtns.find((btn) => {
+      const text = (btn.textContent || "").trim().toLowerCase();
+      return text === "message" && isVisibleElement(btn);
+    });
+    return Boolean(msgBtn);
   }
 
   async function findContactButton() {
@@ -527,12 +535,19 @@
       const ariaButton = document.querySelector('button[aria-label*="Contact"]');
       if (ariaButton) return ariaButton;
 
-      const allButtons = Array.from(document.querySelectorAll("button"));
+      const allButtons = Array.from(document.querySelectorAll("button")).filter((b) => isVisibleElement(b));
       const contactByText = allButtons.find((btn) => {
         const text = (btn.textContent || "").trim().toLowerCase();
         return text === "contact" || text.includes("contact");
       });
-      return contactByText || null;
+      if (contactByText) return contactByText;
+
+      // Fallback: look for a standalone "Message" button (some LinkedIn layouts skip the Contact dropdown)
+      const messageByText = allButtons.find((btn) => {
+        const text = (btn.textContent || "").trim().toLowerCase();
+        return text === "message";
+      });
+      return messageByText || null;
     }, 3, 1000);
   }
 
@@ -1325,11 +1340,48 @@
     }
 
     // Try direct Message button first (new layout with hiring-applicant-contact-message)
-    const directMessageBtn = document.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
+    let directMessageBtn = document.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
+
+    // Fallback: find a standalone "Message" button by text/aria-label in the applicant header area
+    if (!directMessageBtn) {
+      const headerRoots = [
+        document.querySelector('.hiring-applicant-header'),
+        document.querySelector('[data-test-applicant-details]'),
+        document.querySelector('[data-view-name="hiring-applicant-details"]'),
+        document.querySelector('main section'),
+        document.querySelector('main')
+      ].filter(Boolean);
+
+      for (const root of headerRoots) {
+        if (directMessageBtn) break;
+        const btns = Array.from(root.querySelectorAll('button, a[role="button"]'));
+        directMessageBtn = btns.find((btn) => {
+          const text = (btn.textContent || "").trim().toLowerCase();
+          const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+          // Match buttons whose text/aria is exactly "message" or starts with "message "
+          if (text === "message" || aria === "message" || aria.startsWith("message ")) return true;
+          // Also match InMail/Send message variants
+          if (text === "send message" || aria === "send message") return true;
+          return false;
+        }) || null;
+      }
+    }
+
+    // Global fallback: any visible button/link whose text is exactly "Message"
+    if (!directMessageBtn) {
+      const allBtns = Array.from(document.querySelectorAll('button, a[role="button"]'));
+      directMessageBtn = allBtns.find((btn) => {
+        if (!isVisibleElement(btn)) return false;
+        const text = (btn.textContent || "").trim();
+        if (text.toLowerCase() === "message") return true;
+        return false;
+      }) || null;
+    }
+
     let editor, dialog;
 
     if (directMessageBtn) {
-      log("Found direct Message button (new layout)");
+      log("Found direct Message button:", directMessageBtn.textContent?.trim());
       const existingEditors = new Set(getAllComposerEditors());
       const editorWatchPromise = watchForMessageEditor(30000);
       directMessageBtn.click();
@@ -1410,7 +1462,7 @@
     const fullName = pickBestCandidateName(cardName, dialogName);
     const parsed = U.parseCandidateName(fullName);
     const firstName = deriveCandidateFirstName(cardName, parsed.name || fullName);
-    const jobTitle = "";
+    const jobTitle = getJobTitleFromPanel();
     const finalMessage = U.fillTemplate(state.template, {
       name: parsed.name,
       firstName,
@@ -1487,6 +1539,9 @@
         return;
       }
 
+      let consecutiveFailures = 0;
+      const MAX_CONSECUTIVE_FAILURES = 3;
+
       for (let i = 0; i < cards.length; i += 1) {
         assertNotStopped();
         state = await getState();
@@ -1502,9 +1557,11 @@
           const latestCards = getCandidateCards();
           const currentCard = latestCards[i] || cards[i];
           if (!currentCard) {
-            throw new Error("Candidate card became unavailable.");
+            log(`Card ${i} became unavailable, skipping.`);
+            continue;
           }
           const result = await processCandidate(currentCard, i, state, sentMap);
+          consecutiveFailures = 0; // Reset on success/skip
           if (result.sent) {
             sentCount += 1;
             await updateProgress({ sentCount, currentCandidate: result.cardName, status: "Sent" });
@@ -1515,13 +1572,24 @@
           }
         } catch (error) {
           if (error?.code === "STOP_REQUESTED") throw error;
-          log("Candidate processing failed; pausing automation.", error);
-          await updateProgress({
-            status: `Paused: ${error?.message || "Unknown error"}`,
-            running: false
-          });
-          await setStatePatch({ running: false });
-          break;
+          consecutiveFailures += 1;
+          log(`Candidate ${i} processing failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, error?.message);
+
+          // Close any stale composer that may block next candidate
+          try { await closeAnyOpenComposer(); } catch (_) {}
+
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            log("Too many consecutive failures; pausing automation.");
+            await updateProgress({
+              status: `Paused: ${consecutiveFailures} consecutive failures – ${error?.message || "Unknown error"}`,
+              running: false
+            });
+            await setStatePatch({ running: false });
+            break;
+          }
+
+          // Single failure: log and continue to next candidate
+          await updateProgress({ status: `Skipped (error): ${error?.message || "Unknown"}` });
         }
 
         await safeDelay();
