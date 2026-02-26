@@ -115,10 +115,25 @@
   }
 
   function contentEditableHasText(element, text) {
-    const actual = normalizeText(element.innerText || element.textContent || "");
-    const expected = normalizeText(text);
-    if (!actual || !expected) return false;
-    return actual.includes(expected) || expected.includes(actual);
+    // Compare line-by-line to ensure line breaks are preserved.
+    const rawActual = (element.innerText || element.textContent || "").trim();
+    const rawExpected = (text || "").trim();
+    if (!rawActual || !rawExpected) return false;
+
+    // Quick check: normalized comparison (ignoring whitespace differences).
+    const actualNorm = rawActual.replace(/\s+/g, " ").trim();
+    const expectedNorm = rawExpected.replace(/\s+/g, " ").trim();
+    if (!(actualNorm.includes(expectedNorm) || expectedNorm.includes(actualNorm))) return false;
+
+    // If the template has line breaks, verify the editor actually contains them.
+    if (rawExpected.includes("\n")) {
+      const expectedLines = rawExpected.split("\n").map((l) => l.trim()).filter(Boolean);
+      const actualLines = rawActual.split("\n").map((l) => l.trim()).filter(Boolean);
+      // Every expected line must appear in the editor output.
+      return expectedLines.every((line) => actualLines.some((al) => al.includes(line)));
+    }
+
+    return true;
   }
 
   function clearContentEditable(element) {
@@ -158,10 +173,20 @@
     clearContentEditable(element);
     element.focus();
     for (const ch of String(text)) {
-      const inserted = doc.execCommand("insertText", false, ch);
-      if (!inserted) {
-        const activeParagraph = element.querySelector("p:last-child") || element;
-        activeParagraph.append(document.createTextNode(ch));
+      if (ch === "\n") {
+        // Insert a paragraph break for newline characters.
+        const brInserted = doc.execCommand("insertParagraph", false, null);
+        if (!brInserted) {
+          const br = doc.createElement("br");
+          const activeParagraph = element.querySelector("p:last-child") || element;
+          activeParagraph.appendChild(br);
+        }
+      } else {
+        const inserted = doc.execCommand("insertText", false, ch);
+        if (!inserted) {
+          const activeParagraph = element.querySelector("p:last-child") || element;
+          activeParagraph.append(doc.createTextNode(ch));
+        }
       }
     }
     dispatchInputEvents(element);
@@ -191,22 +216,22 @@
       selection.addRange(range);
     }
 
-    // Try normal insert first.
-    doc.execCommand("selectAll", false, null);
-    doc.execCommand("delete", false, null);
-    const inserted = doc.execCommand("insertText", false, text);
+    const hasLineBreaks = text.includes("\n");
 
-    // LinkedIn editors may require paragraph markup instead of plain textContent.
-    if (!inserted || (element.textContent || "").trim() !== text.trim()) {
-      const escaped = text
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll("\n", "<br>");
-      element.innerHTML = `<p>${escaped}</p>`;
+    // For text without line breaks, try execCommand (fastest, preserves undo).
+    if (!hasLineBreaks) {
+      doc.execCommand("selectAll", false, null);
+      doc.execCommand("delete", false, null);
+      const inserted = doc.execCommand("insertText", false, text);
+      if (inserted && (element.textContent || "").trim() === text.trim()) {
+        dispatchInputEvents(element);
+        return;
+      }
     }
 
-    dispatchInputEvents(element);
+    // For multiline text (or if insertText failed), use per-line <p> markup
+    // which LinkedIn's editor recognizes as separate paragraphs / line breaks.
+    setParagraphMarkup(element, text);
   }
 
   // LinkedIn shows applicants at two URL patterns:
