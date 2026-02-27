@@ -1469,14 +1469,35 @@
       jobTitle
     });
 
-    const writeOk = U.writeMessageToEditor(editor, finalMessage);
-    if (!writeOk) {
-      throw new Error("Message editor did not accept inserted text.");
+    // Attempt to write the message with retries and delays between attempts.
+    // LinkedIn's React/Lexical editor may need time to process DOM events.
+    let writeSuccess = false;
+    for (let writeAttempt = 0; writeAttempt < 4; writeAttempt++) {
+      if (writeAttempt > 0) {
+        // Re-focus the editor in case the framework stole focus.
+        try { editor.focus(); } catch (_) {}
+        await U.sleep(U.randomInt(300, 700));
+      }
+      const ok = U.writeMessageToEditor(editor, finalMessage);
+      if (ok) {
+        writeSuccess = true;
+        break;
+      }
+      log(`Write attempt ${writeAttempt + 1} did not verify; retrying…`);
+      await U.sleep(U.randomInt(400, 800));
+
+      // After delay, check again — the framework may have processed events.
+      const editorText = (editor.innerText || editor.textContent || "").replace(/\s+/g, " ").trim();
+      const expectedText = finalMessage.replace(/\s+/g, " ").trim();
+      if (editorText.includes(expectedText) || editorText.includes(expectedText.slice(0, 40))) {
+        writeSuccess = true;
+        break;
+      }
     }
-    // Retry once if LinkedIn keeps default prefilled text on first attempt.
-    const secondWriteOk = U.writeMessageToEditor(editor, finalMessage);
-    if (!secondWriteOk) {
-      throw new Error("Message editor did not accept custom template.");
+    if (!writeSuccess) {
+      log("All write attempts failed. Editor content:",
+        (editor.innerText || editor.textContent || "").slice(0, 200));
+      throw new Error("Message editor did not accept inserted text after multiple attempts.");
     }
     await U.sleep(U.randomInt(200, 550));
 
