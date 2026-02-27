@@ -401,7 +401,7 @@
     const hiringApplicantLink = card.querySelector('a[href*="/applicants/"][href*="/detail/"]');
     if (hiringApplicantLink) {
       hiringApplicantLink.click();
-      await U.sleep(U.randomInt(120, 260));
+      await U.sleep(U.randomInt(1000, 6000));
       return true;
     }
 
@@ -429,7 +429,7 @@
       const clickTarget = target.closest("button, a, [role='button']") || target;
       if (clickTarget instanceof HTMLElement) {
         clickTarget.click();
-        await U.sleep(U.randomInt(120, 260));
+        await U.sleep(U.randomInt(1000, 6000));
         return true;
       }
     }
@@ -440,7 +440,7 @@
     );
     if (!hasShortlistInCard) {
       card.click();
-      await U.sleep(U.randomInt(120, 260));
+      await U.sleep(U.randomInt(1000, 6000));
       return true;
     }
     return false;
@@ -504,7 +504,7 @@
   async function safeDelay() {
     assertNotStopped();
     U.randomScroll(window);
-    await U.humanDelay(3000, 8000);
+    await U.humanDelay(1000, 6000);
     assertNotStopped();
   }
 
@@ -1327,7 +1327,7 @@
     }
 
     card.scrollIntoView({ behavior: "smooth", block: "center" });
-    await U.sleep(U.randomInt(180, 450));
+    await U.sleep(U.randomInt(1000, 6000));
     const opened = await openCandidateDetails(card);
     if (!opened) {
       throw new Error("Could not safely open applicant details without shortlist action.");
@@ -1385,7 +1385,7 @@
       const existingEditors = new Set(getAllComposerEditors());
       const editorWatchPromise = watchForMessageEditor(30000);
       directMessageBtn.click();
-      await U.sleep(U.randomInt(300, 900));
+      await U.sleep(U.randomInt(1000, 6000));
 
       editor =
         (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
@@ -1414,7 +1414,7 @@
         (messageOption.textContent || "").trim()
       );
       messageOption.click();
-      await U.sleep(U.randomInt(300, 900));
+      await U.sleep(U.randomInt(1000, 6000));
 
       editor =
         (await waitForEditorForCurrentApplicant(30000, 250, existingEditors)) ||
@@ -1476,7 +1476,7 @@
       if (writeAttempt > 0) {
         // Re-focus the editor in case the framework stole focus.
         try { editor.focus(); } catch (_) {}
-        await U.sleep(U.randomInt(300, 700));
+        await U.sleep(U.randomInt(1000, 6000));
       }
       const ok = U.writeMessageToEditor(editor, finalMessage);
       if (ok) {
@@ -1484,7 +1484,7 @@
         break;
       }
       log(`Write attempt ${writeAttempt + 1} did not verify; retrying…`);
-      await U.sleep(U.randomInt(400, 800));
+      await U.sleep(U.randomInt(1000, 6000));
 
       // After delay, check again — the framework may have processed events.
       const editorText = (editor.innerText || editor.textContent || "").replace(/\s+/g, " ").trim();
@@ -1499,7 +1499,7 @@
         (editor.innerText || editor.textContent || "").slice(0, 200));
       throw new Error("Message editor did not accept inserted text after multiple attempts.");
     }
-    await U.sleep(U.randomInt(200, 550));
+    await U.sleep(U.randomInt(1000, 6000));
 
     const sendButton = findSendButton(dialog, editor);
     if (!sendButton) {
@@ -1509,7 +1509,7 @@
     let didSend = false;
     if (state.mode === "auto") {
       sendButton.click();
-      await U.sleep(U.randomInt(900, 1600));
+      await U.sleep(U.randomInt(1000, 6000));
       const closed = await closeDialog(dialog, editor);
       if (!closed) {
         log("Composer did not close after send; continuing.");
