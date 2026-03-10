@@ -204,13 +204,22 @@
       return raw.replace(/,\s*verified profile/i, "").trim();
     }
 
+    const ignorePhrases = ["view full profile", "show more", "show details", "load more", "see more"];
+    const isIgnoredPhrase = (text) => {
+      const lower = (text || "").trim().toLowerCase();
+      return ignorePhrases.some((phrase) => lower.includes(phrase));
+    };
+
     const strongText = card.querySelector("strong");
-    if (strongText?.textContent?.trim()) return strongText.textContent.trim();
+    if (strongText?.textContent?.trim() && !isIgnoredPhrase(strongText.textContent)) return strongText.textContent.trim();
     const spans = Array.from(card.querySelectorAll("span"));
-    const likely = spans.find((s) => (s.textContent || "").trim().split(" ").length >= 2);
+    const likely = spans.find((s) => {
+      const text = (s.textContent || "").trim();
+      return text.split(" ").length >= 2 && !isIgnoredPhrase(text);
+    });
     if (likely?.textContent?.trim()) return likely.textContent.trim();
     const paragraph = card.querySelector("p");
-    if (paragraph?.textContent?.trim()) return paragraph.textContent.trim();
+    if (paragraph?.textContent?.trim() && !isIgnoredPhrase(paragraph.textContent)) return paragraph.textContent.trim();
     return likely?.textContent?.trim() || "Candidate";
   }
 
@@ -388,11 +397,9 @@
     const text = (el.textContent || "").trim().toLowerCase();
     const aria = (el.getAttribute("aria-label") || "").trim().toLowerCase();
     const dataControl = (el.getAttribute("data-control-name") || "").trim().toLowerCase();
-    return (
-      text.includes("shortlist") ||
-      aria.includes("shortlist") ||
-      aria.includes("save") ||
-      dataControl.includes("shortlist")
+    const blockedKeywords = ["shortlist", "save", "not a fit", "reject", "decline", "archive", "remove"];
+    return blockedKeywords.some(
+      (kw) => text.includes(kw) || aria.includes(kw) || dataControl.includes(kw)
     );
   }
 
@@ -1342,40 +1349,43 @@
     // Try direct Message button first (new layout with hiring-applicant-contact-message)
     let directMessageBtn = document.querySelector('button[data-view-name="hiring-applicant-contact-message"]');
 
-    // Fallback: find a standalone "Message" button by text/aria-label in the applicant header area
+    // Fallback: find a standalone Message/InMail button using Shadow DOM-aware search
     if (!directMessageBtn) {
-      const headerRoots = [
-        document.querySelector('.hiring-applicant-header'),
-        document.querySelector('[data-test-applicant-details]'),
-        document.querySelector('[data-view-name="hiring-applicant-details"]'),
-        document.querySelector('main section'),
-        document.querySelector('main')
-      ].filter(Boolean);
+      const messageLabelMatches = (btn) => {
+        const text = (btn.textContent || "").trim().toLowerCase();
+        const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+        if (text === "message" || aria === "message" || aria.startsWith("message ")) return true;
+        if (text === "send message" || aria === "send message") return true;
+        if (text === "inmail" || aria === "inmail" || aria.startsWith("inmail ")) return true;
+        if (text === "send inmail" || aria === "send inmail") return true;
+        return false;
+      };
 
-      for (const root of headerRoots) {
+      const headerSelectors = [
+        '.hiring-applicant-header',
+        '[data-test-applicant-details]',
+        '[data-view-name="hiring-applicant-details"]',
+        'main section',
+        'main'
+      ];
+      for (const sel of headerSelectors) {
         if (directMessageBtn) break;
-        const btns = Array.from(root.querySelectorAll('button, a[role="button"]'));
-        directMessageBtn = btns.find((btn) => {
-          const text = (btn.textContent || "").trim().toLowerCase();
-          const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
-          // Match buttons whose text/aria is exactly "message" or starts with "message "
-          if (text === "message" || aria === "message" || aria.startsWith("message ")) return true;
-          // Also match InMail/Send message variants
-          if (text === "send message" || aria === "send message") return true;
-          return false;
+        const root = document.querySelector(sel);
+        if (!root) continue;
+        const btns = queryAllAcrossDocumentsDeep('button, a[role="button"]').filter(
+          (btn) => root.contains(btn)
+        );
+        directMessageBtn = btns.find(messageLabelMatches) || null;
+      }
+
+      // Global shadow DOM fallback
+      if (!directMessageBtn) {
+        const allBtns = queryAllAcrossDocumentsDeep('button, a[role="button"]');
+        directMessageBtn = allBtns.find((btn) => {
+          if (!isVisibleElement(btn)) return false;
+          return messageLabelMatches(btn);
         }) || null;
       }
-    }
-
-    // Global fallback: any visible button/link whose text is exactly "Message"
-    if (!directMessageBtn) {
-      const allBtns = Array.from(document.querySelectorAll('button, a[role="button"]'));
-      directMessageBtn = allBtns.find((btn) => {
-        if (!isVisibleElement(btn)) return false;
-        const text = (btn.textContent || "").trim();
-        if (text.toLowerCase() === "message") return true;
-        return false;
-      }) || null;
     }
 
     let editor, dialog;
