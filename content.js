@@ -279,8 +279,37 @@
         .replace(/^job[:\s-]*/i, "")
         .replace(/^role[:\s-]*/i, "");
 
+    // Strategy 1: Check the Document/Tab Title (Highly reliable across layout changes)
+    // Example: "(2) Software Engineer Applicants | LinkedIn" -> "Software Engineer"
+    try {
+      let docTitle = document.title || "";
+      docTitle = docTitle.replace(/^\(\d+\)\s*/, ""); // Remove (1) notification counts
+      let mainPart = docTitle.split("|")[0].trim();   // Get "Software Engineer Applicants"
+      
+      let extracted = mainPart
+        .replace(/applicants/ig, "")
+        .replace(/applied for/ig, "")
+        .trim();
+        
+      if (extracted && extracted.length > 2 && extracted.toLowerCase() !== "linkedin hiring") {
+        return extracted;
+      }
+    } catch (e) {}
+
+    // Strategy 2: Explicit job links in the new layout breadcrumbs
+    const jobLinks = Array.from(document.querySelectorAll('a[href*="/jobs/view/"], a[href*="/hiring/jobs/"]'));
+    const explicitLink = jobLinks.find(a => {
+      const text = normalize(a.textContent);
+      // Ensure it's not a generic button like "View all jobs"
+      return text && text.length > 3 && !text.toLowerCase().includes("all jobs") && !text.toLowerCase().includes("applicants");
+    });
+    if (explicitLink) {
+      return normalize(explicitLink.textContent);
+    }
+
+    // Strategy 3: Original fallback heuristic (searching for "applied for:", etc.)
     const candidates = [];
-    const scopedNodes = Array.from(document.querySelectorAll("[data-test-applicant-details], main, section, aside"));
+    const scopedNodes = Array.from(document.querySelectorAll("[data-test-applicant-details], main, section, aside, header"));
     const roots = scopedNodes.length ? scopedNodes : [document.body];
     for (const root of roots) {
       const nodes = Array.from(root.querySelectorAll("h1, h2, h3, [aria-label], span, p, a"));
@@ -303,6 +332,24 @@
 
     const best = candidates.find((text) => !/^applied for$/i.test(text)) || candidates[0] || "";
     return best.slice(0, 120);
+  }
+
+  function normalizeJobUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      const url = new URL(raw, window.location.href);
+      return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
+    } catch (_) {
+      return raw.replace(/\/+$/, "");
+    }
+  }
+
+  function getJobTrackingContext(state) {
+    const jobUrl = normalizeJobUrl(state?.jobUrl || "");
+    const jobLabel = jobUrl || getJobTitleFromPanel() || "-";
+    const jobKey = jobUrl || `title:${jobLabel.toLowerCase()}`;
+    return { jobKey, jobLabel, jobUrl };
   }
 
   function deriveCandidateFirstName(cardName, fullName) {
@@ -1556,7 +1603,18 @@
 
       let sentMap = await getSentMap();
       let sentCount = Number(state.sentCount || 0);
+      let totalSuccessfulSentCount = Number(state.totalSuccessfulSentCount || 0);
+      const jobContext = getJobTrackingContext(state);
+      let jobCounts = { ...(state.jobCounts || {}) };
+      let currentJobSuccessfulSentCount = Number(jobCounts[jobContext.jobKey]?.sentCount || 0);
       const maxPerSession = Number(state.maxPerSession || 25);
+
+      await setStatePatch({
+        jobUrl: jobContext.jobUrl,
+        currentJobKey: jobContext.jobKey,
+        currentJobLabel: jobContext.jobLabel,
+        currentJobSuccessfulSentCount
+      });
 
       await updateProgress({ status: "Running" });
 
@@ -1595,7 +1653,27 @@
           consecutiveFailures = 0; // Reset on success/skip
           if (result.sent) {
             sentCount += 1;
-            await updateProgress({ sentCount, currentCandidate: result.cardName, status: "Sent" });
+            totalSuccessfulSentCount += 1;
+            currentJobSuccessfulSentCount += 1;
+            jobCounts = {
+              ...jobCounts,
+              [jobContext.jobKey]: {
+                label: jobContext.jobLabel,
+                sentCount: currentJobSuccessfulSentCount,
+                lastSentAt: Date.now()
+              }
+            };
+            await updateProgress({
+              sentCount,
+              totalSuccessfulSentCount,
+              jobUrl: jobContext.jobUrl,
+              currentJobKey: jobContext.jobKey,
+              currentJobLabel: jobContext.jobLabel,
+              currentJobSuccessfulSentCount,
+              jobCounts,
+              currentCandidate: result.cardName,
+              status: "Sent"
+            });
           } else if (result.skipped) {
             const skipStatus =
               result.reason === "existing conversation" ? "Skipped: already has messages" : "Skipped duplicate";

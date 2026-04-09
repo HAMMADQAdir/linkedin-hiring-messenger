@@ -7,14 +7,18 @@ const STORAGE_KEYS = {
 
 const els = {
   template: document.getElementById("template"),
+  jobUrl: document.getElementById("jobUrl"),
   manualMode: document.getElementById("manualMode"),
   autoMode: document.getElementById("autoMode"),
   sentCount: document.getElementById("sentCount"),
+  currentJobLabel: document.getElementById("currentJobLabel"),
+  currentJobCount: document.getElementById("currentJobCount"),
   candidateName: document.getElementById("candidateName"),
   runState: document.getElementById("runState"),
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
   resetBtn: document.getElementById("resetBtn"),
+  getJobCountBtn: document.getElementById("getJobCountBtn"),
   closeModalBtn: document.getElementById("closeModalBtn")
 };
 
@@ -25,6 +29,12 @@ async function getState() {
       running: false,
       status: "Stopped",
       sentCount: 0,
+      totalSuccessfulSentCount: 0,
+      jobUrl: "",
+      currentJobKey: "",
+      currentJobLabel: "-",
+      currentJobSuccessfulSentCount: 0,
+      jobCounts: {},
       currentCandidate: "-",
       mode: "manual",
       template: DEFAULT_TEMPLATE,
@@ -35,11 +45,29 @@ async function getState() {
 
 function renderState(state) {
   els.template.value = state.template || DEFAULT_TEMPLATE;
+  if (els.jobUrl) els.jobUrl.value = state.jobUrl || "";
   els.manualMode.checked = state.mode !== "auto";
   els.autoMode.checked = state.mode === "auto";
-  els.sentCount.textContent = String(state.sentCount || 0);
+  els.sentCount.textContent = String(state.totalSuccessfulSentCount || 0);
+  const activeJobKey = normalizeJobKey(state.jobUrl || state.currentJobKey || "");
+  const jobCounts = state.jobCounts && typeof state.jobCounts === "object" ? state.jobCounts : {};
+  const activeJobEntry = activeJobKey ? jobCounts[activeJobKey] : null;
+  const currentJobCount = Number(activeJobEntry?.sentCount ?? state.currentJobSuccessfulSentCount ?? 0);
+  if (els.currentJobLabel) els.currentJobLabel.textContent = state.jobUrl || state.currentJobLabel || "-";
+  if (els.currentJobCount) els.currentJobCount.textContent = String(currentJobCount);
   els.candidateName.textContent = state.currentCandidate || "-";
   els.runState.textContent = state.status || (state.running ? "Running" : "Stopped");
+}
+
+function normalizeJobKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw, window.location.href);
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+  } catch (_) {
+    return raw.replace(/\/+$/, "");
+  }
 }
 
 async function updateStatePatch(patch) {
@@ -86,10 +114,15 @@ async function startMessaging() {
 
   const mode = els.autoMode.checked ? "auto" : "manual";
   const template = (els.template.value || "").trim() || DEFAULT_TEMPLATE;
+  const jobUrl = await normalizeAndSaveJobUrl(els.jobUrl?.value || "");
+  if (!jobUrl) {
+    els.runState.textContent = "Paste the job URL first";
+    return;
+  }
 
   const startResponse = await chrome.runtime.sendMessage({
     type: "START_AUTOMATION",
-    payload: { mode, template }
+    payload: { mode, template, jobUrl }
   });
   if (!startResponse?.ok) {
     els.runState.textContent = "Failed to start";
@@ -135,6 +168,51 @@ async function saveDraftSettings() {
   await updateStatePatch({ mode, template });
 }
 
+async function saveJobUrlSettings() {
+  if (!els.jobUrl) return;
+  await updateStatePatch({ jobUrl: (els.jobUrl.value || "").trim() });
+}
+
+async function normalizeAndSaveJobUrl(jobUrl) {
+  const raw = (jobUrl || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const normalized = `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+    if (els.jobUrl) els.jobUrl.value = normalized;
+    await updateStatePatch({ jobUrl: normalized });
+    return normalized;
+  } catch (_) {
+    if (els.jobUrl) els.jobUrl.value = raw;
+    await updateStatePatch({ jobUrl: raw });
+    return raw;
+  }
+}
+
+async function showCountForCurrentJobUrl() {
+  const normalizedJobUrl = await normalizeAndSaveJobUrl(els.jobUrl?.value || "");
+  if (!normalizedJobUrl) {
+    els.runState.textContent = "Paste the job URL first";
+    return;
+  }
+
+  const state = await getState();
+  const jobCounts = state.jobCounts && typeof state.jobCounts === "object" ? state.jobCounts : {};
+  const jobKey = normalizeJobKey(normalizedJobUrl);
+  const count = Number(jobCounts[jobKey]?.sentCount || 0);
+
+  if (els.currentJobLabel) els.currentJobLabel.textContent = normalizedJobUrl;
+  if (els.currentJobCount) els.currentJobCount.textContent = String(count);
+  els.runState.textContent = `Count fetched: ${count}`;
+
+  await updateStatePatch({
+    jobUrl: normalizedJobUrl,
+    currentJobKey: jobKey,
+    currentJobLabel: normalizedJobUrl,
+    currentJobSuccessfulSentCount: count
+  });
+}
+
 async function refresh() {
   const state = await getState();
   renderState(state);
@@ -154,9 +232,11 @@ function bindEvents() {
   });
 
   els.template.addEventListener("blur", saveDraftSettings);
+  if (els.jobUrl) els.jobUrl.addEventListener("blur", saveJobUrlSettings);
   els.startBtn.addEventListener("click", startMessaging);
   els.stopBtn.addEventListener("click", stopMessaging);
   els.resetBtn.addEventListener("click", resetSentList);
+  if (els.getJobCountBtn) els.getJobCountBtn.addEventListener("click", showCountForCurrentJobUrl);
   if (els.closeModalBtn) els.closeModalBtn.addEventListener("click", closeMessageModal);
 
   chrome.storage.onChanged.addListener((changes, area) => {

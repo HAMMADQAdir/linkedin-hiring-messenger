@@ -2,6 +2,12 @@ const DEFAULT_STATE = {
   running: false,
   status: "Stopped",
   sentCount: 0,
+  totalSuccessfulSentCount: 0,
+  jobUrl: "",
+  currentJobKey: "",
+  currentJobLabel: "-",
+  currentJobSuccessfulSentCount: 0,
+  jobCounts: {},
   currentCandidate: "-",
   mode: "manual",
   template:
@@ -52,10 +58,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case "START_AUTOMATION": {
+        const jobUrl = String(message.payload?.jobUrl || "").trim();
         const patch = {
           running: true,
           status: "Running",
           sentCount: 0,
+          jobUrl,
+          currentJobKey: jobUrl,
+          currentJobLabel: jobUrl || "-",
+          currentJobSuccessfulSentCount: 0,
           currentCandidate: "-",
           sessionStartAt: Date.now(),
           mode: message.payload?.mode === "auto" ? "auto" : "manual",
@@ -76,6 +87,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const payload = message.payload || {};
         const patch = {};
         if (typeof payload.sentCount === "number") patch.sentCount = payload.sentCount;
+        if (typeof payload.totalSuccessfulSentCount === "number") patch.totalSuccessfulSentCount = payload.totalSuccessfulSentCount;
+        if (typeof payload.jobUrl === "string") patch.jobUrl = payload.jobUrl;
+        if (typeof payload.currentJobKey === "string") patch.currentJobKey = payload.currentJobKey;
+        if (typeof payload.currentJobLabel === "string") patch.currentJobLabel = payload.currentJobLabel;
+        if (typeof payload.currentJobSuccessfulSentCount === "number") {
+          patch.currentJobSuccessfulSentCount = payload.currentJobSuccessfulSentCount;
+        }
+        if (payload.jobCounts && typeof payload.jobCounts === "object") patch.jobCounts = payload.jobCounts;
         if (typeof payload.status === "string") patch.status = payload.status;
         if (typeof payload.currentCandidate === "string") patch.currentCandidate = payload.currentCandidate;
         const state = await setState(patch);
